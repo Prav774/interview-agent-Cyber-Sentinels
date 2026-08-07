@@ -216,3 +216,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# React / Vite
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Environment variables
+backend/.env
+frontend/.env
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
