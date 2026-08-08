@@ -19,4 +19,10 @@ class InterviewSession(BaseModel):
     question_count: int = 0
     covered_days: list[int] = Field(default_factory=list)
 
+    # Current topic being assessed.
+    # Follow-up questions stay on this topic.
+    current_topic_index: int = 0
+    current_topic_day: int | None = None
+    current_topic_title: str | None = None
+
     done: bool = False
