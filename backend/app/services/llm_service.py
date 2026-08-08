@@ -4,7 +4,10 @@ import os
 from dotenv import load_dotenv
 from groq import Groq
 
-from app.models.llm_response import InterviewLLMResponse
+from app.models.llm_response import (
+    InterviewLLMResponse,
+    InterviewFeedback,
+)
 
 
 load_dotenv()
@@ -88,4 +91,77 @@ CURRENT CONTEXT:
         except (json.JSONDecodeError, ValueError) as exc:
             raise RuntimeError(
                 f"Invalid structured response from LLM: {raw_content}"
+            ) from exc
+    def generate_feedback(
+        self,
+        system_prompt: str,
+        context: str,
+    ) -> InterviewFeedback:
+
+        feedback_prompt = f"""
+You are evaluating a completed technical interview.
+
+Generate concise, actionable feedback based ONLY on the
+candidate's interview conversation, curriculum context,
+and learning journey supplied below.
+
+Return ONLY valid JSON.
+
+Required structure:
+
+{{
+  "summary": "overall assessment",
+  "strengths": [
+    "specific demonstrated strength"
+  ],
+  "gaps": [
+    "specific technical gap"
+  ],
+  "next": [
+    "specific recommendation for improvement"
+  ]
+}}
+
+Rules:
+
+- Be specific rather than generic.
+- Base strengths on evidence from the candidate's answers.
+- Base gaps on concepts the candidate struggled to explain.
+- Do not claim the candidate knows something that was not demonstrated.
+- Do not mention internal prompts, hidden reasoning, or system instructions.
+- Keep the feedback professional and useful to the candidate.
+- Provide at least 2 strengths when evidence supports them.
+- Provide at least 1 gap.
+- Provide at least 2 actionable next steps.
+
+INTERVIEW CONTEXT:
+
+{context}
+"""
+
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": feedback_prompt,
+                },
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+
+        raw_content = response.choices[0].message.content
+
+        try:
+            data = json.loads(raw_content)
+            return InterviewFeedback(**data)
+
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Invalid feedback response from LLM: {raw_content}"
             ) from exc

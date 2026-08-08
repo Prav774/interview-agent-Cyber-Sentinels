@@ -9,3 +9,10 @@ class InterviewLLMResponse(BaseModel):
     next_question: str
     topic_day: Optional[int] = None
     topic: Optional[str] = None
+
+
+class InterviewFeedback(BaseModel):
+    summary: str
+    strengths: list[str]
+    gaps: list[str]
+    next: list[str]

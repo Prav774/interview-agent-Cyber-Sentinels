@@ -292,25 +292,36 @@ def interview(
     # =========================================================
     # COMPLETION GUARD
     # =========================================================
-    #
-    # For now, completion is only allowed when:
-    #
-    # 8+ questions
-    # 4+ curriculum days
-    #
-    # Final feedback will be added in the next step.
-    #
 
-    if (
+    interview_complete = (
         session.question_count >= 8
         and len(session.covered_days) >= 4
-    ):
+    )
+
+    if interview_complete:
+
+        feedback = llm_service.generate_feedback(
+            system_prompt=INTERVIEWER_SYSTEM_PROMPT,
+            context=context,
+        )
+
         session.done = True
+
+        session_manager.save_session(session)
+
+        return InterviewResponse(
+            reply=(
+                "Thank you. That concludes the technical "
+                "interview."
+            ),
+            done=True,
+            feedback=feedback,
+        )
 
     session_manager.save_session(session)
 
     return InterviewResponse(
         reply=result.next_question,
-        done=session.done,
+        done=False,
         feedback=None,
     )
