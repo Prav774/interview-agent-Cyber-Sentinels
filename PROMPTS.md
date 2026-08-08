@@ -101,7 +101,13 @@ The following are **not required**:
 
 5.Analyse the base structure before commit 
 
-6.
+6.start to provide code one by one
+
+7.give me a crt architecture then provide the code
+
+8.is the flow is crt to the given instructions
+
+9.
 
 Outcome:
 Created repository structure with backend, frontend, data, docs and prompts.
