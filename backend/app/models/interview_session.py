@@ -25,4 +25,6 @@ class InterviewSession(BaseModel):
     current_topic_day: int | None = None
     current_topic_title: str | None = None
 
+    follow_ups_on_current_topic: int = 0
+
     done: bool = False

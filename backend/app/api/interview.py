@@ -28,6 +28,10 @@ llm_service = LLMService()
 session_manager = SessionManager()
 
 
+# =========================================================
+# TOPIC HELPERS
+# =========================================================
+
 def get_all_planned_topics(plan):
     """Flatten all interview phases into one ordered topic list."""
 
@@ -68,6 +72,27 @@ def move_to_next_topic(session):
     return get_current_topic(session)
 
 
+def get_next_uncovered_topic(session):
+    """
+    Find the next planned topic whose curriculum day
+    has not yet been covered.
+    """
+
+    topics = get_all_planned_topics(session.plan)
+
+    for index, topic in enumerate(topics):
+
+        if topic.day not in session.covered_days:
+            session.current_topic_index = index
+            return topic
+
+    return None
+
+
+# =========================================================
+# INTERVIEW ENDPOINT
+# =========================================================
+
 @router.post(
     "/interview",
     response_model=InterviewResponse,
@@ -76,9 +101,9 @@ def interview(
     request: InterviewRequest,
 ):
 
-    # =========================================================
+    # =====================================================
     # CREATE / RESTORE SESSION
-    # =========================================================
+    # =====================================================
 
     session = session_manager.get_session(
         request.sessionId
@@ -97,6 +122,7 @@ def interview(
 
         try:
             candidate_id = request.candidate["member"]["id"]
+
         except (KeyError, TypeError):
             raise HTTPException(
                 status_code=400,
@@ -116,9 +142,13 @@ def interview(
                 detail="Candidate not found.",
             )
 
-        profile = candidate_analyzer.analyze(candidate)
+        profile = candidate_analyzer.analyze(
+            candidate
+        )
 
-        plan = interview_planner.create_plan(profile)
+        plan = interview_planner.create_plan(
+            profile
+        )
 
         session = session_manager.create_session(
             session_id=request.sessionId,
@@ -128,9 +158,9 @@ def interview(
             plan=plan,
         )
 
-    # =========================================================
-    # ADD CANDIDATE ANSWER TO CONVERSATION
-    # =========================================================
+    # =====================================================
+    # ADD CANDIDATE ANSWER
+    # =====================================================
 
     if request.message:
 
@@ -141,42 +171,60 @@ def interview(
             }
         )
 
-    # =========================================================
-    # INITIAL QUESTION
-    # =========================================================
+    # =====================================================
+    # INITIAL TOPIC
+    # =====================================================
 
     if session.question_count == 0:
 
-        current_topic = get_current_topic(session)
+        current_topic = get_current_topic(
+            session
+        )
 
         if current_topic is None:
             raise HTTPException(
                 status_code=500,
-                detail="Interview plan contains no topics.",
+                detail=(
+                    "Interview plan contains no topics."
+                ),
             )
 
-        session.current_topic_day = current_topic.day
-        session.current_topic_title = current_topic.title
+        session.current_topic_day = (
+            current_topic.day
+        )
 
-    # =========================================================
-    # BUILD CURRICULUM CONTEXT
-    # =========================================================
+        session.current_topic_title = (
+            current_topic.title
+        )
 
-    current_topic = get_current_topic(session)
+    # =====================================================
+    # CURRENT TOPIC
+    # =====================================================
+
+    current_topic = get_current_topic(
+        session
+    )
 
     if current_topic is None:
         raise HTTPException(
             status_code=500,
-            detail="Unable to determine current interview topic.",
+            detail=(
+                "Unable to determine current "
+                "interview topic."
+            ),
         )
+
+    # =====================================================
+    # CURRICULUM CONTEXT
+    # =====================================================
 
     curriculum_day = curriculum_service.get_day(
         current_topic.day
     )
 
-    # =========================================================
-    # BUILD CONVERSATION FOR LLM
-    # =========================================================
+    # =====================================================
+    # CONVERSATION
+    # =====================================================
 
     conversation = [
         {
@@ -200,9 +248,9 @@ def interview(
         else None
     )
 
-    # =========================================================
+    # =====================================================
     # BUILD LLM CONTEXT
-    # =========================================================
+    # =====================================================
 
     context = context_builder.build(
         profile=session.profile,
@@ -214,71 +262,115 @@ def interview(
         latest_answer=latest_answer,
     )
 
-    # =========================================================
+    # =====================================================
     # ASK GROQ
-    # =========================================================
+    # =====================================================
 
     result = llm_service.generate_interview_turn(
         system_prompt=INTERVIEWER_SYSTEM_PROMPT,
         context=context,
     )
 
-    # =========================================================
+    # =====================================================
     # ADAPTIVE TOPIC CONTROL
-    # =========================================================
+    # =====================================================
 
-    is_follow_up = (
+    MAX_FOLLOW_UPS_PER_TOPIC = 2
+
+    llm_requested_follow_up = (
         session.question_count > 0
         and result.next_action == "follow_up"
     )
 
-    if is_follow_up:
+    can_follow_up = (
+        session.follow_ups_on_current_topic
+        < MAX_FOLLOW_UPS_PER_TOPIC
+    )
 
-        # -----------------------------------------------------
-        # FOLLOW-UP
-        # -----------------------------------------------------
-        #
-        # Stay on the SAME curriculum topic.
-        #
-        # Even if the LLM accidentally returns another
-        # topic_day, the backend keeps the interview grounded.
-        #
+    # -----------------------------------------------------
+    # FOLLOW-UP ON CURRENT TOPIC
+    # -----------------------------------------------------
+
+    if (
+        llm_requested_follow_up
+        and can_follow_up
+    ):
+
+        session.follow_ups_on_current_topic += 1
 
         selected_topic = current_topic
 
+    # -----------------------------------------------------
+    # MOVE TO ANOTHER TOPIC
+    # -----------------------------------------------------
+
     else:
 
-        # -----------------------------------------------------
-        # MOVE TO NEXT TOPIC
-        # -----------------------------------------------------
+        selected_topic = None
 
         if session.question_count > 0:
-            selected_topic = move_to_next_topic(session)
+
+            # Until four different curriculum days have
+            # been covered, prioritize an uncovered topic.
+
+            if len(session.covered_days) < 4:
+
+                uncovered_topic = (
+                    get_next_uncovered_topic(
+                        session
+                    )
+                )
+
+                if uncovered_topic is not None:
+                    selected_topic = uncovered_topic
+
+            # If we could not find an uncovered topic,
+            # continue normally.
+
+            if selected_topic is None:
+
+                selected_topic = (
+                    move_to_next_topic(
+                        session
+                    )
+                )
+
         else:
+
             selected_topic = current_topic
 
+        # Reset follow-up counter for new topic.
+        session.follow_ups_on_current_topic = 0
+
+        # Final safety fallback.
         if selected_topic is None:
             selected_topic = current_topic
 
-    # =========================================================
+    # =====================================================
     # UPDATE CURRENT TOPIC
-    # =========================================================
+    # =====================================================
 
-    session.current_topic_day = selected_topic.day
-    session.current_topic_title = selected_topic.title
+    session.current_topic_day = (
+        selected_topic.day
+    )
 
-    # =========================================================
+    session.current_topic_title = (
+        selected_topic.title
+    )
+
+    # =====================================================
     # TRACK CURRICULUM COVERAGE
-    # =========================================================
+    # =====================================================
 
     if selected_topic.day not in session.covered_days:
+
         session.covered_days.append(
             selected_topic.day
         )
 
-    # =========================================================
+    # =====================================================
     # STORE INTERVIEWER QUESTION
-    # =========================================================
+    # =====================================================
 
     session.conversation.append(
         {
@@ -289,9 +381,9 @@ def interview(
 
     session.question_count += 1
 
-    # =========================================================
+    # =====================================================
     # COMPLETION GUARD
-    # =========================================================
+    # =====================================================
 
     interview_complete = (
         session.question_count >= 8
@@ -300,25 +392,42 @@ def interview(
 
     if interview_complete:
 
-        feedback = llm_service.generate_feedback(
-            system_prompt=INTERVIEWER_SYSTEM_PROMPT,
-            context=context,
+        feedback = (
+            llm_service.generate_feedback(
+                system_prompt=(
+                    INTERVIEWER_SYSTEM_PROMPT
+                ),
+                context=context,
+            )
         )
 
         session.done = True
 
-        session_manager.save_session(session)
+        session_manager.save_session(
+            session
+        )
 
         return InterviewResponse(
             reply=(
-                "Thank you. That concludes the technical "
-                "interview."
+                "Thank you. That concludes the "
+                "technical interview."
             ),
             done=True,
-            feedback=feedback,
+            feedback={
+                "summary": feedback.summary,
+                "strengths": feedback.strengths,
+                "gaps": feedback.gaps,
+                "next": feedback.next,
+            },
         )
 
-    session_manager.save_session(session)
+    # =====================================================
+    # CONTINUE INTERVIEW
+    # =====================================================
+
+    session_manager.save_session(
+        session
+    )
 
     return InterviewResponse(
         reply=result.next_question,

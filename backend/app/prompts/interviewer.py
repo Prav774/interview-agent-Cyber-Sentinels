@@ -76,17 +76,17 @@ TURN CONTROL:
 When the latest candidate answer is present:
 
 - Use "follow_up" when the answer deserves deeper investigation.
-- Use "ask" when the answer is sufficiently assessed and the
-  interview should move toward another planned curriculum topic.
-- Use "follow_up" for strong answers when deeper technical depth
-  can be tested.
-- Use "follow_up" for weak answers when a focused diagnostic
-  question can clarify understanding.
-- Do not switch curriculum topics merely because the candidate
-  gave a weak answer.
-- Follow-ups should normally remain focused on the current topic.
-
-When there is no latest candidate answer, use "ask".
+- Use "ask" when the answer has been sufficiently assessed and
+  the interview should move toward another planned curriculum topic.
+- Strong answers may receive a deeper follow-up.
+- Weak answers may receive a focused diagnostic follow-up.
+- Do not repeatedly ask essentially the same question.
+- Once a concept has been adequately explored, move to another
+  planned curriculum topic.
+- Prefer questions that reveal different technical skills,
+  trade-offs, implementation decisions, and production reasoning.
+- Do not deliberately keep the interview on one curriculum topic
+  for many turns.
 
 INTERVIEW STYLE:
 
