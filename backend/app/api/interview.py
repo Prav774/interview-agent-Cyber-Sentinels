@@ -90,6 +90,87 @@ def get_next_uncovered_topic(session):
 
 
 # =========================================================
+# CONVERSATION HELPER
+# =========================================================
+
+def build_conversation(session):
+    """Convert stored conversation messages into LLM format."""
+
+    return [
+        {
+            "role": (
+                message["role"]
+                if isinstance(message, dict)
+                else message.role
+            ),
+            "content": (
+                message["content"]
+                if isinstance(message, dict)
+                else message.content
+            ),
+        }
+        for message in session.conversation
+    ]
+
+
+# =========================================================
+# FEEDBACK HELPER
+# =========================================================
+
+def generate_final_feedback(
+    session,
+    latest_answer,
+):
+    """
+    Generate final interview feedback after the candidate
+    has answered the eighth question.
+    """
+
+    current_topic = get_current_topic(session)
+
+    if current_topic is None:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Unable to determine current topic "
+                "for final feedback."
+            ),
+        )
+
+    curriculum_day = curriculum_service.get_day(
+        current_topic.day
+    )
+
+    if curriculum_day is None:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Curriculum day {current_topic.day} "
+                "could not be found."
+            ),
+        )
+
+    conversation = build_conversation(session)
+
+    context = context_builder.build(
+        profile=session.profile,
+        plan=session.plan,
+        curriculum_day=curriculum_day,
+        conversation=conversation,
+        question_number=session.question_count,
+        covered_days=session.covered_days,
+        latest_answer=latest_answer,
+    )
+
+    feedback = llm_service.generate_feedback(
+        system_prompt=INTERVIEWER_SYSTEM_PROMPT,
+        context=context,
+    )
+
+    return feedback
+
+
+# =========================================================
 # INTERVIEW ENDPOINT
 # =========================================================
 
@@ -176,6 +257,20 @@ def interview(
         )
 
     # =====================================================
+    # SAFETY CHECK
+    # =====================================================
+
+    if session.done:
+
+        return InterviewResponse(
+            reply=(
+                "This interview has already been completed."
+            ),
+            done=True,
+            feedback=None,
+        )
+
+    # =====================================================
     # ADD CANDIDATE ANSWER TO CONVERSATION
     # =====================================================
 
@@ -189,17 +284,51 @@ def interview(
         )
 
     # =====================================================
-    # SAFETY CHECK
+    # IMPORTANT COMPLETION CHECK
+    # =====================================================
+    #
+    # If question_count is already 8 when a new message
+    # arrives, that message is the candidate's answer
+    # to Question 8.
+    #
+    # Therefore:
+    #
+    # Q8 is NOT generated again.
+    # Q8 has already been shown.
+    # The candidate has now answered it.
+    # Generate final feedback.
+    #
     # =====================================================
 
-    if session.done:
+    if (
+        request.message
+        and session.question_count >= 8
+        and len(session.covered_days) >= 4
+    ):
+
+        feedback = generate_final_feedback(
+            session=session,
+            latest_answer=request.message,
+        )
+
+        session.done = True
+
+        session_manager.save_session(
+            session
+        )
 
         return InterviewResponse(
             reply=(
-                "This interview has already been completed."
+                "Thank you. That concludes the "
+                "technical interview."
             ),
             done=True,
-            feedback=None,
+            feedback={
+                "summary": feedback.summary,
+                "strengths": feedback.strengths,
+                "gaps": feedback.gaps,
+                "next": feedback.next,
+            },
         )
 
     # =====================================================
@@ -316,7 +445,7 @@ def interview(
         )
 
     # =====================================================
-    # GET CURRICULUM FOR THE SELECTED TOPIC
+    # GET CURRICULUM FOR SELECTED TOPIC
     # =====================================================
 
     curriculum_day = curriculum_service.get_day(
@@ -336,21 +465,9 @@ def interview(
     # BUILD CONVERSATION
     # =====================================================
 
-    conversation = [
-        {
-            "role": (
-                message["role"]
-                if isinstance(message, dict)
-                else message.role
-            ),
-            "content": (
-                message["content"]
-                if isinstance(message, dict)
-                else message.content
-            ),
-        }
-        for message in session.conversation
-    ]
+    conversation = build_conversation(
+        session
+    )
 
     # =====================================================
     # LATEST CANDIDATE ANSWER
@@ -398,63 +515,26 @@ def interview(
         }
     )
 
+    # =====================================================
+    # INCREMENT QUESTION COUNT
+    # =====================================================
+
     session.question_count += 1
 
     # =====================================================
-    # COMPLETION GUARD
-    # =====================================================
-
-    interview_complete = (
-        session.question_count >= 8
-        and len(session.covered_days) >= 4
-    )
-
-    # =====================================================
-    # GENERATE FINAL FEEDBACK
-    # =====================================================
-
-    if interview_complete:
-
-        feedback = (
-            llm_service.generate_feedback(
-                system_prompt=(
-                    INTERVIEWER_SYSTEM_PROMPT
-                ),
-                context=context,
-            )
-        )
-
-        session.done = True
-
-        session_manager.save_session(
-            session
-        )
-
-        return InterviewResponse(
-            reply=(
-                "Thank you. That concludes the "
-                "technical interview."
-            ),
-            done=True,
-            feedback={
-                "summary": feedback.summary,
-                "strengths": feedback.strengths,
-                "gaps": feedback.gaps,
-                "next": feedback.next,
-            },
-        )
-
-    # =====================================================
-    # SAVE SESSION
+    # IMPORTANT:
+    # NEVER COMPLETE HERE.
+    #
+    # If this is Question 8, return Question 8 to
+    # the candidate with done=False.
+    #
+    # Completion happens when the candidate sends
+    # the answer to Question 8 on the next request.
     # =====================================================
 
     session_manager.save_session(
         session
     )
-
-    # =====================================================
-    # CONTINUE INTERVIEW
-    # =====================================================
 
     return InterviewResponse(
         reply=result.next_question,
