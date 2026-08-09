@@ -1,11 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 
-const API_URL =
-  `${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/api/interview`;
-  
+const API_URL = `${
+  import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
+}/api/interview`;
+
 function App() {
-  const [candidateId, setCandidateId] = useState("CAND-001");
+  const [candidates, setCandidates] = useState([]);
+  const [candidateId, setCandidateId] = useState("");
+  const [candidatesLoading, setCandidatesLoading] = useState(true);
+
   const [sessionId, setSessionId] = useState("");
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
@@ -15,6 +19,47 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [started, setStarted] = useState(false);
   const [error, setError] = useState("");
+
+  // ============================================================
+  // LOAD ALL CANDIDATES
+  // ============================================================
+
+  useEffect(() => {
+    async function loadCandidates() {
+      try {
+        const response = await fetch("/candidates.json");
+
+        if (!response.ok) {
+          throw new Error(
+            `Failed to load candidates: ${response.status}`
+          );
+        }
+
+        const data = await response.json();
+
+        if (!Array.isArray(data.candidates)) {
+          throw new Error("Invalid candidates.json format");
+        }
+
+        setCandidates(data.candidates);
+
+        if (data.candidates.length > 0) {
+          setCandidateId(data.candidates[0].member.id);
+        }
+      } catch (err) {
+        console.error(err);
+        setError("Unable to load candidate list.");
+      } finally {
+        setCandidatesLoading(false);
+      }
+    }
+
+    loadCandidates();
+  }, []);
+
+  // ============================================================
+  // API REQUEST
+  // ============================================================
 
   async function sendRequest(payload) {
     const response = await fetch(API_URL, {
@@ -27,27 +72,48 @@ function App() {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(text || `Request failed: ${response.status}`);
+      throw new Error(
+        text || `Request failed: ${response.status}`
+      );
     }
 
     return response.json();
   }
 
+  // ============================================================
+  // START INTERVIEW
+  // ============================================================
+
   async function startInterview() {
+    if (!candidateId || candidates.length === 0) {
+      setError("Please select a candidate.");
+      return;
+    }
+
+    const selectedCandidate = candidates.find(
+      (candidate) =>
+        candidate.member.id === candidateId
+    );
+
+    if (!selectedCandidate) {
+      setError("Selected candidate was not found.");
+      return;
+    }
+
     setLoading(true);
     setError("");
 
     const newSessionId = `frontend-${Date.now()}`;
+
     setSessionId(newSessionId);
 
     try {
       const data = await sendRequest({
         sessionId: newSessionId,
-        candidate: {
-          member: {
-            id: candidateId,
-          },
-        },
+
+        // IMPORTANT:
+        // Send the COMPLETE candidate object.
+        candidate: selectedCandidate,
       });
 
       setQuestion(data.reply);
@@ -56,12 +122,18 @@ function App() {
       setDone(false);
       setFeedback(null);
     } catch (err) {
-      setError("Unable to start the interview. Make sure the backend is running.");
       console.error(err);
+      setError(
+        "Unable to start the interview. Please try again."
+      );
     } finally {
       setLoading(false);
     }
   }
+
+  // ============================================================
+  // SUBMIT ANSWER
+  // ============================================================
 
   async function submitAnswer() {
     if (!answer.trim() || loading) {
@@ -80,7 +152,9 @@ function App() {
       setAnswer("");
       setQuestion(data.reply);
 
-      const nextQuestionNumber = questionNumber + 1;
+      const nextQuestionNumber =
+        questionNumber + 1;
+
       setQuestionNumber(nextQuestionNumber);
 
       if (data.done) {
@@ -88,12 +162,18 @@ function App() {
         setFeedback(data.feedback);
       }
     } catch (err) {
-      setError("Unable to submit your answer. Please try again.");
       console.error(err);
+      setError(
+        "Unable to submit your answer. Please try again."
+      );
     } finally {
       setLoading(false);
     }
   }
+
+  // ============================================================
+  // RESET
+  // ============================================================
 
   function resetInterview() {
     setSessionId("");
@@ -106,15 +186,22 @@ function App() {
     setError("");
   }
 
+  // ============================================================
+  // UI
+  // ============================================================
+
   return (
     <div className="app">
-      <div className="background-glow glow-one"></div>
-      <div className="background-glow glow-two"></div>
 
       <header className="header">
         <div>
-          <div className="brand">INTERVIEW AGENT</div>
-          <div className="subtitle">AI Cohort Technical Assessment</div>
+          <div className="brand">
+            INTERVIEW AGENT
+          </div>
+
+          <div className="subtitle">
+            AI Cohort Technical Assessment
+          </div>
         </div>
 
         {started && !done && (
@@ -127,9 +214,17 @@ function App() {
       </header>
 
       <main className="main">
+
+        {/* =====================================================
+            START SCREEN
+        ===================================================== */}
+
         {!started && (
           <section className="start-card">
-            <div className="badge">AI-POWERED TECHNICAL INTERVIEW</div>
+
+            <div className="badge">
+              AI-POWERED TECHNICAL INTERVIEW
+            </div>
 
             <h1>
               Personalized
@@ -138,33 +233,67 @@ function App() {
             </h1>
 
             <p className="intro">
-              An adaptive interview based on your AI Cohort learning journey,
-              strengths, developing areas, and curriculum progress.
+              An adaptive interview based on your AI Cohort
+              learning journey, strengths, developing areas,
+              and curriculum progress.
             </p>
 
             <div className="candidate-box">
-              <label>Candidate ID</label>
+
+              <label>
+                Candidate
+              </label>
 
               <select
                 value={candidateId}
-                onChange={(e) => setCandidateId(e.target.value)}
+                onChange={(e) =>
+                  setCandidateId(e.target.value)
+                }
+                disabled={
+                  candidatesLoading ||
+                  loading ||
+                  candidates.length === 0
+                }
               >
-                <option value="CAND-001">CAND-001 — Sarah Johnson</option>
-                <option value="CAND-003">CAND-003 — Emily Chen</option>
-                <option value="CAND-010">CAND-010 — Gerald Combs</option>
-                <option value="CAND-011">CAND-011</option>
+                {candidatesLoading ? (
+                  <option>
+                    Loading candidates...
+                  </option>
+                ) : candidates.length === 0 ? (
+                  <option>
+                    No candidates available
+                  </option>
+                ) : (
+                  candidates.map((candidate) => (
+                    <option
+                      key={candidate.member.id}
+                      value={candidate.member.id}
+                    >
+                      {candidate.member.id} —{" "}
+                      {candidate.member.name}
+                    </option>
+                  ))
+                )}
               </select>
+
             </div>
 
             <button
               className="primary-button"
               onClick={startInterview}
-              disabled={loading}
+              disabled={
+                loading ||
+                candidatesLoading ||
+                candidates.length === 0
+              }
             >
-              {loading ? "Starting..." : "Start Interview →"}
+              {loading
+                ? "Starting..."
+                : "Start Interview →"}
             </button>
 
             <div className="requirements">
+
               <div>
                 <strong>8+</strong>
                 <span>Questions</span>
@@ -179,36 +308,59 @@ function App() {
                 <strong>AI</strong>
                 <span>Adaptive Follow-ups</span>
               </div>
+
             </div>
+
           </section>
         )}
 
+        {/* =====================================================
+            INTERVIEW SCREEN
+        ===================================================== */}
+
         {started && !done && (
           <section className="interview-card">
+
             <div className="question-header">
+
               <div>
-                <div className="section-label">TECHNICAL INTERVIEW</div>
-                <h2>Question {questionNumber}</h2>
+                <div className="section-label">
+                  TECHNICAL INTERVIEW
+                </div>
+
+                <h2>
+                  Question {questionNumber}
+                </h2>
               </div>
 
               <div className="live-indicator">
                 <span></span>
                 LIVE
               </div>
+
             </div>
 
             <div className="question-box">
-              <div className="question-mark">?</div>
+
+              <div className="question-mark">
+                ?
+              </div>
 
               <p>{question}</p>
+
             </div>
 
             <div className="answer-section">
-              <label>Your answer</label>
+
+              <label>
+                Your answer
+              </label>
 
               <textarea
                 value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
+                onChange={(e) =>
+                  setAnswer(e.target.value)
+                }
                 placeholder="Explain your approach, reasoning, and technical decisions..."
                 disabled={loading}
                 onKeyDown={(e) => {
@@ -222,16 +374,26 @@ function App() {
               />
 
               <div className="answer-footer">
-                <span>Ctrl + Enter to submit</span>
+
+                <span>
+                  Ctrl + Enter to submit
+                </span>
 
                 <button
                   className="primary-button submit-button"
                   onClick={submitAnswer}
-                  disabled={!answer.trim() || loading}
+                  disabled={
+                    !answer.trim() ||
+                    loading
+                  }
                 >
-                  {loading ? "Evaluating..." : "Submit Answer →"}
+                  {loading
+                    ? "Evaluating..."
+                    : "Submit Answer →"}
                 </button>
+
               </div>
+
             </div>
 
             {error && (
@@ -239,60 +401,105 @@ function App() {
                 {error}
               </div>
             )}
+
           </section>
         )}
 
+        {/* =====================================================
+            FEEDBACK SCREEN
+        ===================================================== */}
+
         {done && (
           <section className="feedback-card">
+
             <div className="completion-badge">
               INTERVIEW COMPLETE
             </div>
 
-            <h1>Technical Interview<br />Completed</h1>
+            <h1>
+              Technical Interview
+              <br />
+              Completed
+            </h1>
 
             <p className="completion-text">
-              Your responses have been evaluated against your personalized
-              curriculum journey.
+              Your responses have been evaluated
+              against your personalized curriculum journey.
             </p>
 
             {feedback && (
               <div className="feedback-content">
+
                 <div className="feedback-section">
-                  <h3>Summary</h3>
-                  <p>{feedback.summary}</p>
+
+                  <h3>
+                    Summary
+                  </h3>
+
+                  <p>
+                    {feedback.summary}
+                  </p>
+
                 </div>
 
                 <div className="feedback-grid">
+
                   <div className="feedback-section">
-                    <h3>Strengths</h3>
+
+                    <h3>
+                      Strengths
+                    </h3>
 
                     <ul>
-                      {feedback.strengths?.map((item, index) => (
-                        <li key={index}>{item}</li>
-                      ))}
+                      {feedback.strengths?.map(
+                        (item, index) => (
+                          <li key={index}>
+                            {item}
+                          </li>
+                        )
+                      )}
                     </ul>
+
                   </div>
 
                   <div className="feedback-section">
-                    <h3>Gaps</h3>
+
+                    <h3>
+                      Gaps
+                    </h3>
 
                     <ul>
-                      {feedback.gaps?.map((item, index) => (
-                        <li key={index}>{item}</li>
-                      ))}
+                      {feedback.gaps?.map(
+                        (item, index) => (
+                          <li key={index}>
+                            {item}
+                          </li>
+                        )
+                      )}
                     </ul>
+
                   </div>
+
                 </div>
 
                 <div className="feedback-section">
-                  <h3>Next Steps</h3>
+
+                  <h3>
+                    Next Steps
+                  </h3>
 
                   <ul>
-                    {feedback.next?.map((item, index) => (
-                      <li key={index}>{item}</li>
-                    ))}
+                    {feedback.next?.map(
+                      (item, index) => (
+                        <li key={index}>
+                          {item}
+                        </li>
+                      )
+                    )}
                   </ul>
+
                 </div>
+
               </div>
             )}
 
@@ -302,14 +509,20 @@ function App() {
             >
               Start New Interview →
             </button>
+
           </section>
         )}
+
+        {/* =====================================================
+            ERROR
+        ===================================================== */}
 
         {error && !started && (
           <div className="error">
             {error}
           </div>
         )}
+
       </main>
 
       <footer>
@@ -317,6 +530,7 @@ function App() {
         <span>•</span>
         <span>AI Cohort Interview Agent</span>
       </footer>
+
     </div>
   );
 }
