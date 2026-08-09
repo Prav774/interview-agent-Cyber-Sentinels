@@ -24,7 +24,7 @@ class LLMService:
             )
 
         self.client = Groq(api_key=api_key)
-        self.model = "llama-3.3-70b-versatile"
+        self.model = "openai/gpt-oss-20b"
 
     def generate_interview_turn(
         self,

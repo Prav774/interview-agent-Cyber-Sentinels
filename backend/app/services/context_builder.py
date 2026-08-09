@@ -17,6 +17,10 @@ class InterviewContextBuilder:
         latest_answer: str | None = None,
     ) -> str:
 
+        # =====================================================
+        # CANDIDATE
+        # =====================================================
+
         candidate_context = {
             "candidate_id": profile.candidate_id,
             "candidate_name": profile.candidate_name,
@@ -28,87 +32,102 @@ class InterviewContextBuilder:
             "commit_days": profile.commit_days,
         }
 
-        learning_signals = {
-            "strengths": [
-                {
-                    "day": topic.day,
-                    "title": topic.title,
-                    "status": topic.status,
-                    "attempts": topic.attempts,
-                    "reason": topic.reason,
-                }
-                for topic in profile.strengths
-            ],
-            "developing_areas": [
-                {
-                    "day": topic.day,
-                    "title": topic.title,
-                    "status": topic.status,
-                    "attempts": topic.attempts,
-                    "reason": topic.reason,
-                }
-                for topic in profile.weak_areas
-            ],
-            "skipped_topics": [
-                {
-                    "day": topic.day,
-                    "title": topic.title,
-                    "status": topic.status,
-                    "attempts": topic.attempts,
-                    "reason": topic.reason,
-                }
-                for topic in profile.skipped_topics
-            ],
-        }
+        # =====================================================
+        # CURRENT TOPIC LEARNING SIGNAL
+        # =====================================================
 
-        plan_context = {
-            "minimum_questions": plan.minimum_questions,
-            "minimum_curriculum_days": plan.minimum_curriculum_days,
-            "planned_questions": plan.planned_questions,
-            "planned_curriculum_days": plan.planned_curriculum_days,
-            "phases": [
-                {
-                    "name": phase.name,
-                    "purpose": phase.purpose,
-                    "topics": [
-                        {
-                            "day": topic.day,
-                            "title": topic.title,
-                            "phase": topic.phase,
-                            "priority": topic.priority,
-                            "difficulty": topic.difficulty,
-                            "reason": topic.reason,
-                        }
-                        for topic in phase.topics
-                    ],
-                }
-                for phase in plan.phases
-            ],
-        }
+        current_day = None
+
+        if curriculum_day:
+            current_day = curriculum_day.get("day")
+
+        current_signal = None
+
+        if current_day is not None:
+
+            all_signals = (
+                list(profile.strengths)
+                + list(profile.weak_areas)
+                + list(profile.skipped_topics)
+            )
+
+            for topic in all_signals:
+
+                if topic.day == current_day:
+
+                    current_signal = {
+                        "day": topic.day,
+                        "title": topic.title,
+                        "status": topic.status,
+                        "attempts": topic.attempts,
+                        "reason": topic.reason,
+                    }
+
+                    break
+
+        # =====================================================
+        # CURRENT CURRICULUM
+        # =====================================================
 
         curriculum_context = None
 
         if curriculum_day:
+
             curriculum_context = {
                 "day": curriculum_day.get("day"),
                 "title": curriculum_day.get("title"),
                 "type": curriculum_day.get("type"),
                 "tools": curriculum_day.get("tools", []),
-                "objectives": curriculum_day.get("objectives", []),
+                "objectives": curriculum_day.get(
+                    "objectives",
+                    [],
+                ),
             }
 
+        # =====================================================
+        # INTERVIEW STATE
+        # =====================================================
+
+        interview_state = {
+            "question_number": question_number,
+            "minimum_questions": plan.minimum_questions,
+            "minimum_curriculum_days": (
+                plan.minimum_curriculum_days
+            ),
+            "covered_curriculum_days": covered_days,
+        }
+
+        # =====================================================
+        # RECENT CONVERSATION
+        # =====================================================
+
+        # Keep enough conversation for natural follow-ups
+        # without repeatedly sending a huge transcript.
+        #
+        # At the end of the interview, the complete session is
+        # still stored by SessionManager.
+
+        max_recent_messages = 8
+
+        recent_conversation = conversation[
+            -max_recent_messages:
+        ]
+
+        # =====================================================
+        # COMPACT CONTEXT
+        # =====================================================
+
         context = {
-            "interview_state": {
-                "question_number": question_number,
-                "minimum_questions": 8,
-                "minimum_curriculum_days": 4,
-                "covered_curriculum_days": covered_days,
-            },
+            "interview_state": interview_state,
+
             "candidate": candidate_context,
-            "learning_signals": learning_signals,
-            "interview_plan": plan_context,
+
+            "current_learning_signal": current_signal,
+
             "current_curriculum_topic": curriculum_context,
-            "conversation": conversation,
+
+            "conversation": recent_conversation,
+
             "latest_candidate_answer": latest_answer,
         }
 
