@@ -1,10 +1,10 @@
 import json
 import urllib.request
-
+import time
 
 BASE_URL = "http://127.0.0.1:8000/api/interview"
 
-SESSION_ID = "full-e2e-test-002"
+SESSION_ID = "full-e2e-test-003"
 
 answers = [
     "Embeddings represent text as vectors so that semantically similar content can be located near each other in vector space.",
@@ -71,7 +71,8 @@ print(response["reply"])
 # ------------------------------------------------------------
 
 for answer in answers:
-
+    print("\n⏱ Waiting 30 seconds before the next interview turn...")
+    time.sleep(30)
     response = post({
         "sessionId": SESSION_ID,
         "message": answer

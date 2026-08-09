@@ -111,6 +111,7 @@ def interview(
 
     if session is None:
 
+        # Candidate is required only for the first request.
         if not request.candidate:
             raise HTTPException(
                 status_code=400,
@@ -132,6 +133,10 @@ def interview(
                 ),
             )
 
+        # -------------------------------------------------
+        # LOAD CANDIDATE
+        # -------------------------------------------------
+
         candidate = candidate_service.get_candidate(
             candidate_id
         )
@@ -142,13 +147,25 @@ def interview(
                 detail="Candidate not found.",
             )
 
+        # -------------------------------------------------
+        # ANALYZE CANDIDATE
+        # -------------------------------------------------
+
         profile = candidate_analyzer.analyze(
             candidate
         )
 
+        # -------------------------------------------------
+        # CREATE PERSONALIZED PLAN
+        # -------------------------------------------------
+
         plan = interview_planner.create_plan(
             profile
         )
+
+        # -------------------------------------------------
+        # CREATE SESSION
+        # -------------------------------------------------
 
         session = session_manager.create_session(
             session_id=request.sessionId,
@@ -159,7 +176,7 @@ def interview(
         )
 
     # =====================================================
-    # ADD CANDIDATE ANSWER
+    # ADD CANDIDATE ANSWER TO CONVERSATION
     # =====================================================
 
     if request.message:
@@ -172,34 +189,24 @@ def interview(
         )
 
     # =====================================================
-    # INITIAL TOPIC
+    # SAFETY CHECK
     # =====================================================
 
-    if session.question_count == 0:
+    if session.done:
 
-        current_topic = get_current_topic(
-            session
-        )
-
-        if current_topic is None:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Interview plan contains no topics."
-                ),
-            )
-
-        session.current_topic_day = (
-            current_topic.day
-        )
-
-        session.current_topic_title = (
-            current_topic.title
+        return InterviewResponse(
+            reply=(
+                "This interview has already been completed."
+            ),
+            done=True,
+            feedback=None,
         )
 
     # =====================================================
-    # CURRENT TOPIC
+    # SELECT TOPIC FOR THIS TURN
     # =====================================================
+
+    MAX_FOLLOW_UPS_PER_TOPIC = 2
 
     current_topic = get_current_topic(
         session
@@ -209,125 +216,70 @@ def interview(
         raise HTTPException(
             status_code=500,
             detail=(
-                "Unable to determine current "
-                "interview topic."
+                "Interview plan contains no topics."
             ),
         )
 
-    # =====================================================
-    # CURRICULUM CONTEXT
-    # =====================================================
-
-    curriculum_day = curriculum_service.get_day(
-        current_topic.day
-    )
-
-    # =====================================================
-    # CONVERSATION
-    # =====================================================
-
-    conversation = [
-        {
-            "role": (
-                message["role"]
-                if isinstance(message, dict)
-                else message.role
-            ),
-            "content": (
-                message["content"]
-                if isinstance(message, dict)
-                else message.content
-            ),
-        }
-        for message in session.conversation
-    ]
-
-    latest_answer = (
-        request.message
-        if request.message
-        else None
-    )
-
-    # =====================================================
-    # BUILD LLM CONTEXT
-    # =====================================================
-
-    context = context_builder.build(
-        profile=session.profile,
-        plan=session.plan,
-        curriculum_day=curriculum_day,
-        conversation=conversation,
-        question_number=session.question_count + 1,
-        covered_days=session.covered_days,
-        latest_answer=latest_answer,
-    )
-
-    # =====================================================
-    # ASK GROQ
-    # =====================================================
-
-    result = llm_service.generate_interview_turn(
-        system_prompt=INTERVIEWER_SYSTEM_PROMPT,
-        context=context,
-    )
-
-    # =====================================================
-    # ADAPTIVE TOPIC CONTROL
-    # =====================================================
-
-    MAX_FOLLOW_UPS_PER_TOPIC = 2
-
-    llm_requested_follow_up = (
-        session.question_count > 0
-        and result.next_action == "follow_up"
-    )
-
-    can_follow_up = (
-        session.follow_ups_on_current_topic
-        < MAX_FOLLOW_UPS_PER_TOPIC
-    )
-
     # -----------------------------------------------------
-    # FOLLOW-UP ON CURRENT TOPIC
+    # FIRST QUESTION
     # -----------------------------------------------------
 
-    if (
-        llm_requested_follow_up
-        and can_follow_up
-    ):
-
-        session.follow_ups_on_current_topic += 1
+    if session.question_count == 0:
 
         selected_topic = current_topic
 
+        session.follow_ups_on_current_topic = 0
+
     # -----------------------------------------------------
-    # MOVE TO ANOTHER TOPIC
+    # SUBSEQUENT QUESTIONS
     # -----------------------------------------------------
 
     else:
 
-        selected_topic = None
+        # =================================================
+        # FORCE FOUR DIFFERENT CURRICULUM DAYS FIRST
+        # =================================================
 
-        if session.question_count > 0:
+        if len(session.covered_days) < 4:
 
-            # Until four different curriculum days have
-            # been covered, prioritize an uncovered topic.
+            uncovered_topic = (
+                get_next_uncovered_topic(session)
+            )
 
-            if len(session.covered_days) < 4:
+            if uncovered_topic is not None:
 
-                uncovered_topic = (
-                    get_next_uncovered_topic(
-                        session
-                    )
-                )
+                selected_topic = uncovered_topic
 
-                if uncovered_topic is not None:
-                    selected_topic = uncovered_topic
+                session.follow_ups_on_current_topic = 0
 
-            # If we could not find an uncovered topic,
-            # continue normally.
+            else:
 
-            if selected_topic is None:
+                selected_topic = current_topic
+
+        # =================================================
+        # AFTER FOUR DAYS ARE COVERED
+        # =================================================
+
+        else:
+
+            # -------------------------------------------------
+            # ALLOW LIMITED FOLLOW-UPS
+            # -------------------------------------------------
+
+            if (
+                session.follow_ups_on_current_topic
+                < MAX_FOLLOW_UPS_PER_TOPIC
+            ):
+
+                selected_topic = current_topic
+
+                session.follow_ups_on_current_topic += 1
+
+            # -------------------------------------------------
+            # MOVE TO NEXT TOPIC
+            # -------------------------------------------------
+
+            else:
 
                 selected_topic = (
                     move_to_next_topic(
@@ -335,16 +287,11 @@ def interview(
                     )
                 )
 
-        else:
+                session.follow_ups_on_current_topic = 0
 
-            selected_topic = current_topic
-
-        # Reset follow-up counter for new topic.
-        session.follow_ups_on_current_topic = 0
-
-        # Final safety fallback.
-        if selected_topic is None:
-            selected_topic = current_topic
+                # Safety fallback.
+                if selected_topic is None:
+                    selected_topic = current_topic
 
     # =====================================================
     # UPDATE CURRENT TOPIC
@@ -369,6 +316,78 @@ def interview(
         )
 
     # =====================================================
+    # GET CURRICULUM FOR THE SELECTED TOPIC
+    # =====================================================
+
+    curriculum_day = curriculum_service.get_day(
+        selected_topic.day
+    )
+
+    if curriculum_day is None:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Curriculum day {selected_topic.day} "
+                "could not be found."
+            ),
+        )
+
+    # =====================================================
+    # BUILD CONVERSATION
+    # =====================================================
+
+    conversation = [
+        {
+            "role": (
+                message["role"]
+                if isinstance(message, dict)
+                else message.role
+            ),
+            "content": (
+                message["content"]
+                if isinstance(message, dict)
+                else message.content
+            ),
+        }
+        for message in session.conversation
+    ]
+
+    # =====================================================
+    # LATEST CANDIDATE ANSWER
+    # =====================================================
+
+    latest_answer = (
+        request.message
+        if request.message
+        else None
+    )
+
+    # =====================================================
+    # BUILD LLM CONTEXT
+    # =====================================================
+
+    context = context_builder.build(
+        profile=session.profile,
+        plan=session.plan,
+        curriculum_day=curriculum_day,
+        conversation=conversation,
+        question_number=(
+            session.question_count + 1
+        ),
+        covered_days=session.covered_days,
+        latest_answer=latest_answer,
+    )
+
+    # =====================================================
+    # ASK GROQ
+    # =====================================================
+
+    result = llm_service.generate_interview_turn(
+        system_prompt=INTERVIEWER_SYSTEM_PROMPT,
+        context=context,
+    )
+
+    # =====================================================
     # STORE INTERVIEWER QUESTION
     # =====================================================
 
@@ -389,6 +408,10 @@ def interview(
         session.question_count >= 8
         and len(session.covered_days) >= 4
     )
+
+    # =====================================================
+    # GENERATE FINAL FEEDBACK
+    # =====================================================
 
     if interview_complete:
 
@@ -422,12 +445,16 @@ def interview(
         )
 
     # =====================================================
-    # CONTINUE INTERVIEW
+    # SAVE SESSION
     # =====================================================
 
     session_manager.save_session(
         session
     )
+
+    # =====================================================
+    # CONTINUE INTERVIEW
+    # =====================================================
 
     return InterviewResponse(
         reply=result.next_question,
